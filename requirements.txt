@@ -1,5 +1,5 @@
 fastapi
-uvicorn[standard]
+uvicorn[standard]==0.29.0
 pydantic
 requests
 python-dotenv
