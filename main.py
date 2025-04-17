@@ -1,4 +1,6 @@
 import os
+import json
+from threading import Lock
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
@@ -23,17 +25,40 @@ SCOPES = (
     "https://www.googleapis.com/auth/gmail.modify"
 )
 
-SPOTIFY_SCOPES = "user-read-currently-playing user-read-playback-state user-modify-playback-state playlist-read-private playlist-modify-private user-top-read"
+SPOTIFY_SCOPES = (
+    "user-read-currently-playing user-read-playback-state "
+    "user-modify-playback-state playlist-read-private "
+    "playlist-modify-private user-top-read user-read-email"
+)
 
-TOKENS = {}
+# --- TOKEN STORAGE (File-based) ---
+TOKEN_FILE = "tokens.json"
+token_lock = Lock()
+
+def load_tokens():
+    with token_lock:
+        if not os.path.exists(TOKEN_FILE):
+            return {}
+        with open(TOKEN_FILE, "r") as f:
+            return json.load(f)
+
+def save_tokens(tokens):
+    with token_lock:
+        with open(TOKEN_FILE, "w") as f:
+            json.dump(tokens, f)
+
+TOKENS = load_tokens()
+
 
 class UserInput(BaseModel):
     user_id: str
     content: str
 
+
 @app.get("/")
 def root():
     return {"status": "Running", "auth_url": "/authorize?user_id=example"}
+
 
 @app.get("/authorize")
 def authorize(user_id: str):
@@ -49,6 +74,7 @@ def authorize(user_id: str):
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return RedirectResponse(url)
 
+
 @app.get("/oauth/callback")
 def oauth_callback(code: str, state: str):
     data = {
@@ -60,10 +86,13 @@ def oauth_callback(code: str, state: str):
     }
     r = requests.post("https://oauth2.googleapis.com/token", data=data)
     if r.status_code == 200:
-        TOKENS[state] = TOKENS.get(state, {})
-        TOKENS[state]['google'] = r.json()
+        tokens = load_tokens()
+        tokens[state] = tokens.get(state, {})
+        tokens[state]['google'] = r.json()
+        save_tokens(tokens)
         return JSONResponse({"message": f"Authorized successfully for user_id={state}"})
     return JSONResponse({"error": "Authorization failed"}, status_code=400)
+
 
 @app.get("/spotify-authorize")
 def spotify_authorize(user_id: str):
@@ -76,6 +105,7 @@ def spotify_authorize(user_id: str):
     }
     url = f"https://accounts.spotify.com/authorize?{urlencode(params)}"
     return RedirectResponse(url)
+
 
 @app.get("/spotify-callback")
 def spotify_callback(code: str, state: str):
@@ -94,7 +124,6 @@ def spotify_callback(code: str, state: str):
     token_data = r.json()
     access_token = token_data.get("access_token")
 
-    # Get the real Spotify user info
     user_resp = requests.get(
         "https://api.spotify.com/v1/me",
         headers={"Authorization": f"Bearer {access_token}"}
@@ -109,9 +138,10 @@ def spotify_callback(code: str, state: str):
     if not spotify_user_id:
         return JSONResponse({"error": "Spotify user ID missing"}, status_code=500)
 
-    # Save token using Spotify user ID
-    TOKENS[spotify_user_id] = TOKENS.get(spotify_user_id, {})
-    TOKENS[spotify_user_id]['spotify'] = token_data
+    tokens = load_tokens()
+    tokens[spotify_user_id] = tokens.get(spotify_user_id, {})
+    tokens[spotify_user_id]['spotify'] = token_data
+    save_tokens(tokens)
 
     return JSONResponse({
         "message": f"Spotify connected",
@@ -120,27 +150,47 @@ def spotify_callback(code: str, state: str):
         "email": user_info.get("email")
     })
 
+
 @app.get("/spotify/current-track")
 def get_current_track(user_id: str):
-    token = TOKENS.get(user_id, {}).get('spotify')
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('spotify')
     if not token:
         return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
     headers = {"Authorization": f"Bearer {token['access_token']}"}
     resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
     return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Spotify fetch failed"}, status_code=resp.status_code)
 
+
+@app.get("/spotify/playlists")
+def get_playlists(user_id: str):
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('spotify')
+    if not token:
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    resp = requests.get("https://api.spotify.com/v1/me/playlists", headers=headers)
+    if resp.status_code == 200:
+        return resp.json()
+    else:
+        return JSONResponse({"error": "Failed to fetch playlists"}, status_code=resp.status_code)
+
+
 @app.put("/spotify/play")
 def play_track(user_id: str):
-    token = TOKENS.get(user_id, {}).get('spotify')
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('spotify')
     if not token:
         return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
     headers = {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json"}
     resp = requests.put("https://api.spotify.com/v1/me/player/play", headers=headers)
     return JSONResponse({"message": "Playback started"}) if resp.status_code in [200, 204] else JSONResponse({"error": "Playback failed"}, status_code=resp.status_code)
 
+
 @app.post("/write-profile")
 def write_profile(payload: UserInput):
-    token = TOKENS.get(payload.user_id, {}).get('google')
+    tokens = load_tokens()
+    token = tokens.get(payload.user_id, {}).get('google')
     if not token:
         return JSONResponse({"error": "User not authorized"}, status_code=403)
 
@@ -192,9 +242,11 @@ def write_profile(payload: UserInput):
 
     return {"message": "Profile saved successfully."}
 
+
 @app.get("/read-profile")
 def read_profile(user_id: str):
-    token = TOKENS.get(user_id, {}).get('google')
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('google')
     if not token:
         return JSONResponse({"error": "User not authorized"}, status_code=403)
 
@@ -218,9 +270,11 @@ def read_profile(user_id: str):
     download = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers=headers)
     return {"content": download.text}
 
+
 @app.get("/calendar")
 def get_calendar_events(user_id: str):
-    token = TOKENS.get(user_id, {}).get('google')
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('google')
     if not token:
         return JSONResponse({"error": "User not authorized"}, status_code=403)
 
@@ -253,12 +307,14 @@ def get_calendar_events(user_id: str):
             "details": resp.json()
         }, status_code=resp.status_code)
 
+
 @app.get("/debug-env")
 def debug_env():
     return {
         "SPOTIFY_CLIENT_ID": SPOTIFY_CLIENT_ID,
         "SPOTIFY_REDIRECT_URI": SPOTIFY_REDIRECT_URI
     }
+
 
 if __name__ == "__main__":
     import uvicorn
