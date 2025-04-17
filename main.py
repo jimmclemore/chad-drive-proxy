@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 app = FastAPI()
 
+# --- ENV VARS ---
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
@@ -31,7 +32,7 @@ SPOTIFY_SCOPES = (
     "playlist-modify-private user-top-read user-read-email"
 )
 
-# --- TOKEN STORAGE (File-based) ---
+# --- TOKEN STORAGE ---
 TOKEN_FILE = "tokens.json"
 token_lock = Lock()
 
@@ -49,17 +50,15 @@ def save_tokens(tokens):
 
 TOKENS = load_tokens()
 
-
 class UserInput(BaseModel):
     user_id: str
     content: str
-
 
 @app.get("/")
 def root():
     return {"status": "Running", "auth_url": "/authorize?user_id=example"}
 
-
+# --- GOOGLE AUTH ---
 @app.get("/authorize")
 def authorize(user_id: str):
     params = {
@@ -73,7 +72,6 @@ def authorize(user_id: str):
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return RedirectResponse(url)
-
 
 @app.get("/oauth/callback")
 def oauth_callback(code: str, state: str):
@@ -93,7 +91,7 @@ def oauth_callback(code: str, state: str):
         return JSONResponse({"message": f"Authorized successfully for user_id={state}"})
     return JSONResponse({"error": "Authorization failed"}, status_code=400)
 
-
+# --- SPOTIFY AUTH ---
 @app.get("/spotify-authorize")
 def spotify_authorize(user_id: str):
     params = {
@@ -105,7 +103,6 @@ def spotify_authorize(user_id: str):
     }
     url = f"https://accounts.spotify.com/authorize?{urlencode(params)}"
     return RedirectResponse(url)
-
 
 @app.get("/spotify-callback")
 def spotify_callback(code: str, state: str):
@@ -150,6 +147,16 @@ def spotify_callback(code: str, state: str):
         "email": user_info.get("email")
     })
 
+# --- SPOTIFY ROUTES ---
+@app.get("/spotify/playlists")
+def get_playlists(user_id: str):
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('spotify')
+    if not token:
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    resp = requests.get("https://api.spotify.com/v1/me/playlists", headers=headers)
+    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Spotify fetch failed"}, status_code=resp.status_code)
 
 @app.get("/spotify/current-track")
 def get_current_track(user_id: str):
@@ -161,21 +168,6 @@ def get_current_track(user_id: str):
     resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
     return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Spotify fetch failed"}, status_code=resp.status_code)
 
-
-@app.get("/spotify/playlists")
-def get_playlists(user_id: str):
-    tokens = load_tokens()
-    token = tokens.get(user_id, {}).get('spotify')
-    if not token:
-        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
-    headers = {"Authorization": f"Bearer {token['access_token']}"}
-    resp = requests.get("https://api.spotify.com/v1/me/playlists", headers=headers)
-    if resp.status_code == 200:
-        return resp.json()
-    else:
-        return JSONResponse({"error": "Failed to fetch playlists"}, status_code=resp.status_code)
-
-
 @app.put("/spotify/play")
 def play_track(user_id: str):
     tokens = load_tokens()
@@ -186,105 +178,16 @@ def play_track(user_id: str):
     resp = requests.put("https://api.spotify.com/v1/me/player/play", headers=headers)
     return JSONResponse({"message": "Playback started"}) if resp.status_code in [200, 204] else JSONResponse({"error": "Playback failed"}, status_code=resp.status_code)
 
-
-@app.post("/write-profile")
-def write_profile(payload: UserInput):
-    tokens = load_tokens()
-    token = tokens.get(payload.user_id, {}).get('google')
-    if not token:
-        return JSONResponse({"error": "User not authorized"}, status_code=403)
-
-    headers = {
-        "Authorization": f"Bearer {token['access_token']}",
-        "Content-Type": "application/json"
-    }
-
-    folder_resp = requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        params={"q": "name='ChadGPT' and mimeType='application/vnd.google-apps.folder' and trashed=false"}
-    )
-    folder_id = None
-    files = folder_resp.json().get("files", [])
-    if files:
-        folder_id = files[0]["id"]
-    else:
-        folder_create = {
-            "name": "ChadGPT",
-            "mimeType": "application/vnd.google-apps.folder"
-        }
-        folder_response = requests.post("https://www.googleapis.com/drive/v3/files", headers=headers, json=folder_create)
-        folder_id = folder_response.json()["id"]
-
-    query = f"'{folder_id}' in parents and name='chad-settings.txt' and trashed=false"
-    existing = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query}).json()
-    if existing["files"]:
-        file_id = existing["files"][0]["id"]
-        requests.patch(
-            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
-            headers={"Authorization": f"Bearer {token['access_token']}", "Content-Type": "text/plain"},
-            data=payload.content.encode("utf-8"))
-    else:
-        metadata = {
-            "name": "chad-settings.txt",
-            "parents": [folder_id],
-            "mimeType": "text/plain"
-        }
-        files = {
-            "metadata": ("metadata", str(metadata), "application/json"),
-            "file": ("file", payload.content, "text/plain")
-        }
-        requests.post(
-            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-            headers={"Authorization": f"Bearer {token['access_token']}"},
-            files=files
-        )
-
-    return {"message": "Profile saved successfully."}
-
-
-@app.get("/read-profile")
-def read_profile(user_id: str):
-    tokens = load_tokens()
-    token = tokens.get(user_id, {}).get('google')
-    if not token:
-        return JSONResponse({"error": "User not authorized"}, status_code=403)
-
-    headers = {
-        "Authorization": f"Bearer {token['access_token']}",
-    }
-
-    folder_resp = requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        params={"q": "name='ChadGPT' and mimeType='application/vnd.google-apps.folder' and trashed=false"}
-    )
-    folder_id = folder_resp.json().get("files", [])[0]["id"]
-    query = f"'{folder_id}' in parents and name='chad-settings.txt' and trashed=false"
-    file_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query}).json()
-
-    if not file_resp["files"]:
-        return JSONResponse({"error": "Profile file not found."}, status_code=404)
-
-    file_id = file_resp["files"][0]["id"]
-    download = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers=headers)
-    return {"content": download.text}
-
-
+# --- GOOGLE SERVICES ---
 @app.get("/calendar")
 def get_calendar_events(user_id: str):
     tokens = load_tokens()
     token = tokens.get(user_id, {}).get('google')
     if not token:
         return JSONResponse({"error": "User not authorized"}, status_code=403)
-
-    headers = {
-        "Authorization": f"Bearer {token['access_token']}",
-    }
-
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
     now = datetime.utcnow().isoformat() + "Z"
     future = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
-
     params = {
         "maxResults": 10,
         "orderBy": "startTime",
@@ -292,21 +195,73 @@ def get_calendar_events(user_id: str):
         "timeMin": now,
         "timeMax": future
     }
+    resp = requests.get("https://www.googleapis.com/calendar/v3/calendars/primary/events", headers=headers, params=params)
+    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch calendar", "details": resp.json()}, status_code=resp.status_code)
 
-    resp = requests.get(
-        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-        headers=headers,
-        params=params
-    )
+@app.get("/gmail")
+def get_gmail_messages(user_id: str):
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('google')
+    if not token:
+        return JSONResponse({"error": "User not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    resp = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params={"maxResults": 10})
+    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch Gmail messages", "details": resp.json()}, status_code=resp.status_code)
 
-    if resp.status_code == 200:
-        return resp.json()
+@app.post("/gmail/modify")
+def modify_gmail(user_id: str, message_id: str, labels_to_add: list):
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('google')
+    if not token:
+        return JSONResponse({"error": "User not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json"}
+    data = {"addLabelIds": labels_to_add}
+    resp = requests.post(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify", headers=headers, json=data)
+    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to modify Gmail message", "details": resp.json()}, status_code=resp.status_code)
+
+@app.get("/read-profile")
+def read_profile(user_id: str):
+    tokens = load_tokens()
+    token = tokens.get(user_id, {}).get('google')
+    if not token:
+        return JSONResponse({"error": "User not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    folder_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": "name='ChadGPT' and mimeType='application/vnd.google-apps.folder' and trashed=false"})
+    folder_id = folder_resp.json().get("files", [])[0]["id"]
+    query = f"'{folder_id}' in parents and name='chad-settings.txt' and trashed=false"
+    file_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query}).json()
+    if not file_resp["files"]:
+        return JSONResponse({"error": "Profile file not found."}, status_code=404)
+    file_id = file_resp["files"][0]["id"]
+    download = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers=headers)
+    return {"content": download.text}
+
+@app.post("/write-profile")
+def write_profile(payload: UserInput):
+    tokens = load_tokens()
+    token = tokens.get(payload.user_id, {}).get('google')
+    if not token:
+        return JSONResponse({"error": "User not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json"}
+    folder_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": "name='ChadGPT' and mimeType='application/vnd.google-apps.folder' and trashed=false"})
+    folder_id = None
+    files = folder_resp.json().get("files", [])
+    if files:
+        folder_id = files[0]["id"]
     else:
-        return JSONResponse({
-            "error": "Failed to fetch calendar",
-            "details": resp.json()
-        }, status_code=resp.status_code)
-
+        folder_create = {"name": "ChadGPT", "mimeType": "application/vnd.google-apps.folder"}
+        folder_response = requests.post("https://www.googleapis.com/drive/v3/files", headers=headers, json=folder_create)
+        folder_id = folder_response.json()["id"]
+    query = f"'{folder_id}' in parents and name='chad-settings.txt' and trashed=false"
+    existing = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query}).json()
+    if existing["files"]:
+        file_id = existing["files"][0]["id"]
+        requests.patch(f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media", headers={"Authorization": f"Bearer {token['access_token']}", "Content-Type": "text/plain"}, data=payload.content.encode("utf-8"))
+    else:
+        metadata = {"name": "chad-settings.txt", "parents": [folder_id], "mimeType": "text/plain"}
+        files = {"metadata": ("metadata", str(metadata), "application/json"), "file": ("file", payload.content, "text/plain")}
+        requests.post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", headers={"Authorization": f"Bearer {token['access_token']}"}, files=files)
+    return {"message": "Profile saved successfully."}
 
 @app.get("/debug-env")
 def debug_env():
@@ -314,7 +269,6 @@ def debug_env():
         "SPOTIFY_CLIENT_ID": SPOTIFY_CLIENT_ID,
         "SPOTIFY_REDIRECT_URI": SPOTIFY_REDIRECT_URI
     }
-
 
 if __name__ == "__main__":
     import uvicorn
