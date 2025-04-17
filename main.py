@@ -226,6 +226,13 @@ def get_calendar_events(user_id: str):
             "details": resp.json()
         }, status_code=resp.status_code)
 
+@app.get("/debug-env")
+def debug_env():
+    return {
+        "SPOTIFY_CLIENT_ID": SPOTIFY_CLIENT_ID,
+        "SPOTIFY_REDIRECT_URI": SPOTIFY_REDIRECT_URI
+    }
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
