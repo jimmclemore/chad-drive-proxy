@@ -106,7 +106,43 @@ def write_profile(payload: UserInput):
         )
 
     return {"message": "Profile saved successfully."}
+from datetime import datetime, timedelta
 
+@app.get("/calendar")
+def get_calendar_events(user_id: str):
+    token = TOKENS.get(user_id)
+    if not token:
+        return JSONResponse({"error": "User not authorized"}, status_code=403)
+
+    headers = {
+        "Authorization": f"Bearer {token['access_token']}",
+    }
+
+    now = datetime.utcnow().isoformat() + "Z"
+    future = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+
+    params = {
+        "maxResults": 10,
+        "orderBy": "startTime",
+        "singleEvents": True,
+        "timeMin": now,
+        "timeMax": future
+    }
+
+    resp = requests.get(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        headers=headers,
+        params=params
+    )
+
+    if resp.status_code == 200:
+        return resp.json()
+    else:
+        return JSONResponse({
+            "error": "Failed to fetch calendar",
+            "details": resp.json()
+        }, status_code=resp.status_code)
+        
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
