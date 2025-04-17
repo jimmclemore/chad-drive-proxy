@@ -23,7 +23,7 @@ SCOPES = (
     "https://www.googleapis.com/auth/gmail.modify"
 )
 
-SPOTIFY_SCOPES = "user-read-currently-playing user-read-playback-state user-modify-playback-state"
+SPOTIFY_SCOPES = "user-read-currently-playing user-read-playback-state user-modify-playback-state playlist-read-private playlist-modify-private user-top-read"
 
 TOKENS = {}
 
@@ -70,7 +70,7 @@ def spotify_authorize(user_id: str):
     params = {
         "client_id": SPOTIFY_CLIENT_ID,
         "response_type": "code",
-        "redirect_uri": SPOTIFY_REDIRECT_URI,  # ✅ Should be /spotify-callback
+        "redirect_uri": SPOTIFY_REDIRECT_URI,
         "scope": SPOTIFY_SCOPES,
         "state": user_id
     }
@@ -86,12 +86,39 @@ def spotify_callback(code: str, state: str):
         "client_id": SPOTIFY_CLIENT_ID,
         "client_secret": SPOTIFY_CLIENT_SECRET
     }
+
     r = requests.post("https://accounts.spotify.com/api/token", data=data)
-    if r.status_code == 200:
-        TOKENS[state] = TOKENS.get(state, {})
-        TOKENS[state]['spotify'] = r.json()
-        return JSONResponse({"message": f"Spotify connected for user_id={state}"})
-    return JSONResponse({"error": "Spotify auth failed"}, status_code=400)
+    if r.status_code != 200:
+        return JSONResponse({"error": "Spotify auth failed"}, status_code=400)
+
+    token_data = r.json()
+    access_token = token_data.get("access_token")
+
+    # Get the real Spotify user info
+    user_resp = requests.get(
+        "https://api.spotify.com/v1/me",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    if user_resp.status_code != 200:
+        return JSONResponse({"error": "Failed to fetch Spotify user info"}, status_code=500)
+
+    user_info = user_resp.json()
+    spotify_user_id = user_info.get("id")
+
+    if not spotify_user_id:
+        return JSONResponse({"error": "Spotify user ID missing"}, status_code=500)
+
+    # Save token using Spotify user ID
+    TOKENS[spotify_user_id] = TOKENS.get(spotify_user_id, {})
+    TOKENS[spotify_user_id]['spotify'] = token_data
+
+    return JSONResponse({
+        "message": f"Spotify connected",
+        "spotify_user_id": spotify_user_id,
+        "display_name": user_info.get("display_name"),
+        "email": user_info.get("email")
+    })
 
 @app.get("/spotify/current-track")
 def get_current_track(user_id: str):
