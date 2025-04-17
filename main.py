@@ -70,7 +70,7 @@ def spotify_authorize(user_id: str):
     params = {
         "client_id": SPOTIFY_CLIENT_ID,
         "response_type": "code",
-        "redirect_uri": SPOTIFY_REDIRECT_URI,
+        "redirect_uri": SPOTIFY_REDIRECT_URI,  # ✅ Should be /spotify-callback
         "scope": SPOTIFY_SCOPES,
         "state": user_id
     }
