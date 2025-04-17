@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: chad-drive-proxy
+    env: python
+    buildCommand: "python3 -m pip install -r requirements.txt"
+    startCommand: "python3 main.py"
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+    rootDir: .
