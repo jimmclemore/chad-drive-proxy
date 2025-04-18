@@ -199,3 +199,7 @@ def get_gmail_messages(user_id: str, max_results: int = 100):
                         break
             messages.append({"id": msg_id, "subject": subject, "from": sender, "date": date, "body": body or "(No content found)"})
     return {"messages": messages}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
