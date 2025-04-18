@@ -161,7 +161,7 @@ def play_track(user_id: str):
     return JSONResponse({"message": "Playback started"}) if resp.status_code in [200, 204] else JSONResponse({"error": "Playback failed"}, status_code=resp.status_code)
 
 @app.get("/calendar")
-def get_calendar_events(user_id: str):
+def get_calendar_events(user_id: str, days_ahead: int = Query(30)):
     tokens = load_tokens()
     token = tokens.get(user_id, {}).get('google')
     if not token:
