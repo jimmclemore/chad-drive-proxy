@@ -9,7 +9,11 @@ from datetime import datetime, timedelta
 import requests
 from urllib.parse import urlencode
 
-app = FastAPI()
+app = FastAPI(
+    title="FastAPI",
+    version="1.0.0",
+    servers=[{"url": "https://chad-drive-proxy.onrender.com"}]
+)
 
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
