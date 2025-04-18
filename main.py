@@ -2,7 +2,7 @@ import os
 import json
 import base64
 from threading import Lock
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Query  # 👈 added Query here
 from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -170,7 +170,7 @@ def get_calendar_events(user_id: str):
     return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch calendar", "details": resp.json()}, status_code=resp.status_code)
 
 @app.get("/gmail")
-def get_gmail_messages(user_id: str, max_results: int = 100):
+def get_gmail_messages(user_id: str, max_results: int = Query(100)):
     tokens = load_tokens()
     token = tokens.get(user_id, {}).get('google')
     if not token:
