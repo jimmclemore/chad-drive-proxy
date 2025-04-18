@@ -1,8 +1,9 @@
 import os
 import json
 import base64
+import logging
 from threading import Lock
-from fastapi import FastAPI, Body, Query  # 👈 added Query here
+from fastapi import FastAPI, Body, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -33,11 +34,13 @@ SCOPES = (
 SPOTIFY_SCOPES = (
     "user-read-currently-playing user-read-playback-state "
     "user-modify-playback-state playlist-read-private "
-    "playlist-modify-private user-top-read user-read-email"
+    "playlist-modify-private user-top-read user-read-email user-library-read"
 )
 
 TOKEN_FILE = "tokens.json"
 token_lock = Lock()
+
+logging.basicConfig(level=logging.INFO)
 
 def load_tokens():
     with token_lock:
@@ -56,10 +59,6 @@ TOKENS = load_tokens()
 class UserInput(BaseModel):
     user_id: str
     content: str
-
-@app.get("/")
-def root():
-    return {"status": "Running", "auth_url": "/authorize?user_id=example"}
 
 @app.get("/authorize")
 def authorize(user_id: str):
@@ -150,26 +149,6 @@ def get_current_track(user_id: str):
     resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
     return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Spotify fetch failed"}, status_code=resp.status_code)
 
-@app.get("/spotify/top-tracks")
-def get_top_tracks(user_id: str, time_range: str = "medium_term", limit: int = 10):
-    token = TOKENS.get(user_id, {}).get('spotify')
-    if not token:
-        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
-    headers = {"Authorization": f"Bearer {token['access_token']}"}
-    params = {"time_range": time_range, "limit": limit}
-    resp = requests.get("https://api.spotify.com/v1/me/top/tracks", headers=headers, params=params)
-    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch top tracks"}, status_code=resp.status_code)
-
-@app.get("/spotify/liked-songs")
-def get_liked_songs(user_id: str, limit: int = 20, offset: int = 0):
-    token = TOKENS.get(user_id, {}).get('spotify')
-    if not token:
-        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
-    headers = {"Authorization": f"Bearer {token['access_token']}"}
-    params = {"limit": limit, "offset": offset}
-    resp = requests.get("https://api.spotify.com/v1/me/tracks", headers=headers, params=params)
-    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch liked songs"}, status_code=resp.status_code)
-
 @app.put("/spotify/play")
 def play_track(user_id: str):
     tokens = load_tokens()
@@ -180,49 +159,95 @@ def play_track(user_id: str):
     resp = requests.put("https://api.spotify.com/v1/me/player/play", headers=headers)
     return JSONResponse({"message": "Playback started"}) if resp.status_code in [200, 204] else JSONResponse({"error": "Playback failed"}, status_code=resp.status_code)
 
-@app.get("/calendar")
-def get_calendar_events(user_id: str, days_ahead: int = Query(30)):
+@app.put("/spotify/pause")
+def pause_track(user_id: str):
     tokens = load_tokens()
-    token = tokens.get(user_id, {}).get('google')
+    token = tokens.get(user_id, {}).get('spotify')
     if not token:
-        return JSONResponse({"error": "User not authorized"}, status_code=403)
-    headers = {"Authorization": f"Bearer {token['access_token']}"}
-    now = datetime.utcnow().isoformat() + "Z"
-    future = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
-    params = {"maxResults": 10, "orderBy": "startTime", "singleEvents": True, "timeMin": now, "timeMax": future}
-    resp = requests.get("https://www.googleapis.com/calendar/v3/calendars/primary/events", headers=headers, params=params)
-    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch calendar", "details": resp.json()}, status_code=resp.status_code)
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json"}
+    resp = requests.put("https://api.spotify.com/v1/me/player/pause", headers=headers)
+    return JSONResponse({"message": "Playback paused"}) if resp.status_code in [200, 204] else JSONResponse({"error": "Pause failed"}, status_code=resp.status_code)
 
-@app.get("/gmail", operation_id="getGmailMessages")
-def get_gmail_messages(user_id: str, max_results: int = Query(100)):
+@app.get("/spotify/top-tracks")
+def get_top_tracks(user_id: str, time_range: str = "medium_term", limit: int = 10):
+    try:
+                    token = TOKENS.get(user_id, {}).get('spotify')
+    if not token:
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    params = {"time_range": time_range, "limit": limit}
+    resp = requests.get("https://api.spotify.com/v1/me/top/tracks", headers=headers, params=params)
+            return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch top tracks"}, status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"error": "Exception occurred", "details": str(e)}, status_code=500)
+
+@app.get("/spotify/liked-songs")
+def get_liked_songs(user_id: str, limit: int = 20, offset: int = 0):
+    try:
+    token = TOKENS.get(user_id, {}).get('spotify')
+    if not token:
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    params = {"limit": limit, "offset": offset}
+    resp = requests.get("https://api.spotify.com/v1/me/tracks", headers=headers, params=params)
+            return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch liked songs"}, status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"error": "Exception occurred", "details": str(e)}, status_code=500)
+
+@app.get("/read-profile")
+def read_profile(user_id: str):
+    try:
     tokens = load_tokens()
-    token = tokens.get(user_id, {}).get('google')
+            token = tokens.get(user_id, {}).get('google')
     if not token:
         return JSONResponse({"error": "User not authorized"}, status_code=403)
     headers = {"Authorization": f"Bearer {token['access_token']}"}
-    list_resp = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params={"maxResults": max_results})
-    if list_resp.status_code != 200:
-        return JSONResponse({"error": "Failed to fetch Gmail messages", "details": list_resp.json()}, status_code=list_resp.status_code)
-    messages = []
-    for msg in list_resp.json().get("messages", []):
-        msg_id = msg.get("id")
-        detail_resp = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}", headers=headers, params={"format": "full"})
-        if detail_resp.status_code == 200:
-            msg_json = detail_resp.json()
-            headers_data = msg_json.get("payload", {}).get("headers", [])
-            subject = next((h['value'] for h in headers_data if h['name'] == 'Subject'), "(No Subject)")
-            sender = next((h['value'] for h in headers_data if h['name'] == 'From'), "(Unknown Sender)")
-            date = next((h['value'] for h in headers_data if h['name'] == 'Date'), "(No Date)")
-            parts = msg_json.get("payload", {}).get("parts", [])
-            body = ""
-            for part in parts:
-                if part.get("mimeType") in ["text/plain", "text/html"]:
-                    data = part.get("body", {}).get("data")
-                    if data:
-                        body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
-                        break
-            messages.append({"id": msg_id, "subject": subject, "from": sender, "date": date, "body": body or "(No content found)"})
-    return {"messages": messages}
+    folder_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": "name='ChadGPT' and mimeType='application/vnd.google-apps.folder' and trashed=false"})
+    folder_id = folder_resp.json().get("files", [])[0]["id"]
+    query = f"'{folder_id}' in parents and name='chad-settings.txt' and trashed=false"
+    file_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query}).json()
+    if not file_resp["files"]:
+        return JSONResponse({"error": "Profile file not found."}, status_code=404)
+    file_id = file_resp["files"][0]["id"]
+    download = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers=headers)
+            return {"content": download.text}
+    except Exception as e:
+        return JSONResponse({"error": "Exception occurred", "details": str(e)}, status_code=500)
+
+@app.post("/write-profile")
+def write_profile(payload: UserInput):
+    try:
+    tokens = load_tokens()
+    token = tokens.get(payload.user_id, {}).get('google')
+    if not token:
+        return JSONResponse({"error": "User not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json"}
+    folder_resp = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": "name='ChadGPT' and mimeType='application/vnd.google-apps.folder' and trashed=false"})
+    folder_id = None
+    files = folder_resp.json().get("files", [])
+    if files:
+        folder_id = files[0]["id"]
+    else:
+        folder_create = {"name": "ChadGPT", "mimeType": "application/vnd.google-apps.folder"}
+        folder_response = requests.post("https://www.googleapis.com/drive/v3/files", headers=headers, json=folder_create)
+        folder_id = folder_response.json()["id"]
+    query = f"'{folder_id}' in parents and name='chad-settings.txt' and trashed=false"
+    existing = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query}).json()
+    if existing["files"]:
+        file_id = existing["files"][0]["id"]
+        requests.patch(
+            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
+            headers={"Authorization": f"Bearer {token['access_token']}", "Content-Type": "text/plain"},
+            data=payload.content.encode("utf-8")
+        )
+    else:
+        metadata = {"name": "chad-settings.txt", "parents": [folder_id], "mimeType": "text/plain"}
+        files = {"metadata": ("metadata", json.dumps(metadata), "application/json"), "file": ("file", payload.content, "text/plain")}
+        requests.post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", headers={"Authorization": f"Bearer {token['access_token']}"}, files=files)
+            return {"message": "Profile saved successfully."}
+    except Exception as e:
+        return JSONResponse({"error": "Exception occurred", "details": str(e)}, status_code=500)
 
 if __name__ == "__main__":
     import uvicorn
