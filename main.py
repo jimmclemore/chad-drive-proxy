@@ -150,6 +150,26 @@ def get_current_track(user_id: str):
     resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
     return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Spotify fetch failed"}, status_code=resp.status_code)
 
+@app.get("/spotify/top-tracks")
+def get_top_tracks(user_id: str, time_range: str = "medium_term", limit: int = 10):
+    token = TOKENS.get(user_id, {}).get('spotify')
+    if not token:
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    params = {"time_range": time_range, "limit": limit}
+    resp = requests.get("https://api.spotify.com/v1/me/top/tracks", headers=headers, params=params)
+    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch top tracks"}, status_code=resp.status_code)
+
+@app.get("/spotify/liked-songs")
+def get_liked_songs(user_id: str, limit: int = 20, offset: int = 0):
+    token = TOKENS.get(user_id, {}).get('spotify')
+    if not token:
+        return JSONResponse({"error": "Spotify not authorized"}, status_code=403)
+    headers = {"Authorization": f"Bearer {token['access_token']}"}
+    params = {"limit": limit, "offset": offset}
+    resp = requests.get("https://api.spotify.com/v1/me/tracks", headers=headers, params=params)
+    return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch liked songs"}, status_code=resp.status_code)
+
 @app.put("/spotify/play")
 def play_track(user_id: str):
     tokens = load_tokens()
