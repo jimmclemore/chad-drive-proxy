@@ -173,7 +173,7 @@ def get_calendar_events(user_id: str):
     resp = requests.get("https://www.googleapis.com/calendar/v3/calendars/primary/events", headers=headers, params=params)
     return resp.json() if resp.status_code == 200 else JSONResponse({"error": "Failed to fetch calendar", "details": resp.json()}, status_code=resp.status_code)
 
-@app.get("/gmail")
+@app.get("/gmail", operation_id="getGmailMessages")
 def get_gmail_messages(user_id: str, max_results: int = Query(100)):
     tokens = load_tokens()
     token = tokens.get(user_id, {}).get('google')
