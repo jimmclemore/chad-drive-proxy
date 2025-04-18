@@ -58,7 +58,7 @@ class UserInput(BaseModel):
     user_id: str
     content: str
 
-@app.get("/spotify/top-tracks")
+@app.get("/spotify/top-tracks", operation_id="getTopTracks")
 def get_top_tracks(user_id: str, time_range: str = "medium_term", limit: int = 10):
     try:
         tokens = load_tokens()
